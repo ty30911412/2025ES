@@ -201,7 +201,7 @@ elif page == "依「組別」分析":
             annotation=dict(
                 text=f"Mean: {overall_mean:.2f}",
                 xref="paper",       # 使用圖表寬度的百分比
-                x=0.90,             # 放在 95% 的位置 (非 100%)
+                x=0.85,             # 放在 95% 的位置 (非 100%)
                 xanchor='right',    # 文字的右側對齊 95% 的位置
                 yref="y",
                 y=overall_mean,
@@ -276,7 +276,7 @@ elif page == "依「年資」分析":
             annotation=dict(
                 text=f"Mean: {overall_mean_sen:.2f}",
                 xref="paper",       # 使用圖表寬度的百分比
-                x=0.90,             # 放在 95% 的位置 (非 100%)
+                x=0.85,             # 放在 95% 的位置 (非 100%)
                 xanchor='right',    # 文字的右側對齊 95% 的位置
                 yref="y",
                 y=overall_mean_sen,
