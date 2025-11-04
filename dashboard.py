@@ -207,7 +207,7 @@ elif page == "依「組別」分析":
                 y=overall_mean,
                 yanchor='bottom',   # 錨定在線的下方 (文字在線的上方)
                 font=dict(color="gray"),
-                showarrow=False
+                showarrow=True
             )
         )
         
@@ -282,7 +282,7 @@ elif page == "依「年資」分析":
                 y=overall_mean_sen,
                 yanchor='bottom',   # 錨定在線的下方 (文字在線的上方)
                 font=dict(color="gray"),
-                showarrow=False
+                showarrow=True
             )
         )
 
