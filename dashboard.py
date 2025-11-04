@@ -67,7 +67,7 @@ if page == "總體概況":
     st.header("總體概況 (N=18)")
     
     # (A) 顯示關鍵指標 (KPIs)
-    st.subheader("關鍵指標")
+    st.subheader("關鍵指標 (Key Metrics)")
     try:
         # 抓取 Q104 (整體滿意度) 和 Q100 (留任傾向) 的平均分
         overall_satisfaction = df_overall.loc[df_overall['New_Column'] == 'Q104', 'Mean'].values[0]
@@ -86,7 +86,7 @@ if page == "總體概況":
     
     # 過濾掉 'Q4', 'Q5', 'Q100' (因為它們的量尺不同，不適合放在一起比較)
     df_filtered_overall = df_overall[
-        ~df_overall['New_Column'].isin(['Q4', 'Q5', 'Q100']) & (df_overall['N'] > 0)
+        ~df_overall['New_Column'].isin(['Q4', 'Q5', 'Q100', 'Q104']) & (df_overall['N'] > 0)
     ]
     
     col1, col2 = st.columns(2)
@@ -120,16 +120,14 @@ if page == "總體概況":
             title="Top 10 最低分題目"
         )
         fig_low.update_traces(texttemplate='%{x:.2f}', textposition='outside')
-        fig_low.update_layout(yaxis_title=None, xaxis_range=[df_low10['Mean'].min() * 0.9, df_low10['Mean'].max() * 1.05])
+        fig_low.update_layout(yaxis_title=None, xaxis_range=[df_low10['Mean'].min() * 0.9, df_low10['Mean'].max() * 1.23])
         st.plotly_chart(fig_low, use_container_width=True)
 
-# --- [新增功能 C] 查看單一題目的描述性統計 ---
-    st.subheader("查看單一題目統計")
+    # --- [修改] 查看單一題目的描述性統計 (含選項分佈圖) ---
+    st.subheader("查看單一題目統計與分佈")
     
     try:
         # (C.1) 取得所有數值型題目的列表
-        # 我們從 df_overall (總體統計檔) 中取得列表，確保只包含數值題
-        # 並按照 Q 編號排序
         all_numeric_questions = df_overall.sort_values(
             by='New_Column', 
             key=lambda col: col.str.replace('Q', '').astype(int)
@@ -144,12 +142,48 @@ if page == "總體概況":
         # (C.3) 篩選出該題目的統計數據
         selected_stats = df_overall[df_overall['Original_Column'] == selected_question_overall]
         
-        # (C.4) 顯示結果
         if not selected_stats.empty:
+            
+            # --- (A) 顯示描述性統計表格 (保留) ---
             st.write(f"#### 「{selected_question_overall}」的描述性統計：")
-            # 使用 st.dataframe 顯示更清晰
-            # 我們轉置 (transpose) 表格，讓統計量變成列名
             st.dataframe(selected_stats[['N', 'Mean', 'SD', 'Median', 'Min', 'Max']].iloc[0].round(2).to_frame(name='數值'))
+
+# --- (B) [新增] 顯示選項分佈長條圖 ---
+            try:
+                # B.1: 取得 Q 編號 (例如 'Q15')
+                selected_q_id = selected_stats['New_Column'].values[0]
+                
+                # B.2: 從 df_raw (原始資料) 中取得該欄位的次數分配
+                #      dropna() 會移除 'NA' (未填答)
+                df_counts = df_raw[selected_q_id].dropna().value_counts().reset_index()
+                df_counts.columns = ['選項 (原始文字)', '次數 (N)']
+                
+                # B.3: 繪圖 (依選項文字排序，使其符合 1, 2, 3, 4 的順序)
+                fig_dist = px.bar(
+                    df_counts.sort_values(by='選項 (原始文字)'), 
+                    x='選項 (原始文字)', 
+                    y='次數 (N)', 
+                    text='次數 (N)',
+                    title=f"「{selected_question_overall}」的選項分佈"
+                )
+                fig_dist.update_traces(textposition='outside')
+                
+                # B.4: [*** 修正 ***] 將 yaxis_range 放在正確的 update_layout 中
+                max_y_val = df_counts['次數 (N)'].max()
+                fig_dist.update_layout(
+                    xaxis_title="填答選項", 
+                    yaxis_title="次數 (N)",
+                    yaxis_range=[0, max_y_val * 1.15] # 增加 15% 緩衝
+                )
+                
+                st.plotly_chart(fig_dist, use_container_width=True)
+
+            except KeyError:
+                # 如果 Q 編號不在 df_raw 中 (理論上不應發生)
+                st.warning(f"無法在原始資料 (df_raw) 中找到 {selected_q_id} 的分佈資料。")
+            except Exception as e_dist:
+                st.error(f"繪製選項分佈圖時發生錯誤: {e_dist}")
+
         else:
             st.warning("找不到此題目的統計數據。")
             
