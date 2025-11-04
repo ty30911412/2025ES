@@ -3,12 +3,14 @@
 # 執行方式: python3 -m streamlit run dashboard.py
 # ---------------------------------------------------------------
 
+from pandas.core.nanops import F
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.io as pio
 import jieba 
 import wordcloud
+import matplotlib.pyplot as plt
 
 # --- 0. 頁面設定 ---
 st.set_page_config(
@@ -48,10 +50,10 @@ df_overall, df_group, df_seniority, df_raw, df_codebook = load_data()
 st.sidebar.title("分析維度")
 page = st.sidebar.radio(
     "選擇您要查看的頁面：",
-    ("總體概況 (Overall)", 
-     "依「組別」分析 (by Group)", 
-     "依「年資」分析 (by Seniority)", 
-     "質性回饋分析 (Qualitative)") # <-- 新增
+    ("總體概況", 
+     "依「組別」分析", 
+     "依「年資」分析", 
+     "質性回饋分析") # <-- 新增
 )
 
 # --- 3. 頁面內容 ---
@@ -60,12 +62,12 @@ st.title("2025 誠致 Engagement Survey Dashboard")
 # ===================================================================
 # 頁面一：總體概況
 # ===================================================================
-if page == "總體概況 (Overall)":
+if page == "總體概況":
     
     st.header("總體概況 (N=18)")
     
     # (A) 顯示關鍵指標 (KPIs)
-    st.subheader("關鍵指標 (Key Metrics)")
+    st.subheader("關鍵指標")
     try:
         # 抓取 Q104 (整體滿意度) 和 Q100 (留任傾向) 的平均分
         overall_satisfaction = df_overall.loc[df_overall['New_Column'] == 'Q104', 'Mean'].values[0]
@@ -156,11 +158,10 @@ if page == "總體概況 (Overall)":
 # ===================================================================
 # 頁面二：依「組別」分析
 # ===================================================================
-elif page == "依「組別」分析 (by Group)":
+elif page == "依「組別」分析":
     st.header("依「組別」(Q2) 分析")
     
     # (A) 讓使用者選擇要比較的題目
-    # 取得所有題目的列表 (排除 Q2 自己)
     question_list = df_group['Original_Column'].unique()
     
     selected_question = st.selectbox(
@@ -170,6 +171,13 @@ elif page == "依「組別」分析 (by Group)":
     
     # (B) 篩選出該題目的資料
     df_group_filtered = df_group[df_group['Original_Column'] == selected_question]
+    
+    # [新增] 抓取該題的「整體平均數」
+    try:
+        overall_mean_row = df_overall[df_overall['Original_Column'] == selected_question]
+        overall_mean = overall_mean_row['Mean'].values[0]
+    except (IndexError, TypeError):
+        overall_mean = 0 # 備用，以防萬一
     
     # (C) 繪製分組長條圖
     if not df_group_filtered.empty:
@@ -182,7 +190,34 @@ elif page == "依「組別」分析 (by Group)":
             title=f"各組別在「{selected_question}」的平均分數"
         )
         fig_group.update_traces(texttemplate='%{y:.2f}', textposition='outside')
-        fig_group.update_layout(xaxis_title="組別")
+        
+        # [修改] 加入整體平均紅線 (使用手動座標)
+        fig_group.add_hline(
+            y=overall_mean, 
+            line_dash="dot", 
+            line_color="red",
+            
+            # 使用 annotation 字典手動指定位置
+            annotation=dict(
+                text=f"Mean: {overall_mean:.2f}",
+                xref="paper",       # 使用圖表寬度的百分比
+                x=0.90,             # 放在 95% 的位置 (非 100%)
+                xanchor='right',    # 文字的右側對齊 95% 的位置
+                yref="y",
+                y=overall_mean,
+                yanchor='bottom',   # 錨定在線的下方 (文字在線的上方)
+                font=dict(color="gray"),
+                showarrow=False
+            )
+        )
+        
+        # [修改] 整合 Y 軸範圍 (確保能容納長條圖與紅線)
+        max_val = max(df_group_filtered['Mean'].max(), overall_mean)
+        fig_group.update_layout(
+            xaxis_title="組別",
+            yaxis_range=[0, max_val * 1.15] # 增加 15% 緩衝
+        )
+
         st.plotly_chart(fig_group, use_container_width=True)
         
         # (D) [重要] 顯示 N 數
@@ -196,7 +231,7 @@ elif page == "依「組別」分析 (by Group)":
 # ===================================================================
 # 頁面三：依「年資」分析
 # ===================================================================
-elif page == "依「年資」分析 (by Seniority)":
+elif page == "依「年資」分析":
     st.header("依「年資」(Q4) 分析")
 
     # (A) 讓使用者選擇要比較的題目
@@ -209,6 +244,13 @@ elif page == "依「年資」分析 (by Seniority)":
     
     # (B) 篩選出該題目的資料
     df_sen_filtered = df_seniority[df_seniority['Original_Column'] == selected_question_sen]
+    
+    # [新增] 抓取該題的「整體平均數」
+    try:
+        overall_mean_row_sen = df_overall[df_overall['Original_Column'] == selected_question_sen]
+        overall_mean_sen = overall_mean_row_sen['Mean'].values[0]
+    except (IndexError, TypeError):
+        overall_mean_sen = 0 # 備用，以防万一
     
     # (C) [重要] 確保年資的排序正確
     seniority_order = ["1 年以下", "1-2 年", "2-3 年", "3 年以上"]
@@ -223,12 +265,36 @@ elif page == "依「年資」分析 (by Seniority)":
             title=f"不同年資在「{selected_question_sen}」的平均分數"
         )
         fig_sen.update_traces(texttemplate='%{y:.2f}', textposition='outside')
-        # 應用正確的 X 軸排序
+        
+        # [修改] 加入整體平均紅線 (使用手動座標)
+        fig_sen.add_hline(
+            y=overall_mean_sen, 
+            line_dash="dot", 
+            line_color="red",
+            
+            # 使用 annotation 字典手動指定位置
+            annotation=dict(
+                text=f"Mean: {overall_mean_sen:.2f}",
+                xref="paper",       # 使用圖表寬度的百分比
+                x=0.90,             # 放在 95% 的位置 (非 100%)
+                xanchor='right',    # 文字的右側對齊 95% 的位置
+                yref="y",
+                y=overall_mean_sen,
+                yanchor='bottom',   # 錨定在線的下方 (文字在線的上方)
+                font=dict(color="gray"),
+                showarrow=False
+            )
+        )
+
+        # [修改] 整合 Y 軸範圍 (確保能容納長條圖與紅線)
+        max_val_sen = max(df_sen_filtered['Mean'].max(), overall_mean_sen)
         fig_sen.update_layout(
             xaxis_title="總工作年資",
             xaxis_categoryorder='array',
-            xaxis_categoryarray=seniority_order
+            xaxis_categoryarray=seniority_order,
+            yaxis_range=[0, max_val_sen * 1.15] # 增加 15% 緩衝
         )
+
         st.plotly_chart(fig_sen, use_container_width=True)
         
         # (D) [重要] 顯示 N 數
@@ -237,15 +303,12 @@ elif page == "依「年資」分析 (by Seniority)":
         st.dataframe(df_sen_filtered[['Q4_grouped', 'N', 'Mean', 'SD', 'Median']].set_index('Q4_grouped'))
         
     else:
-        st.warning("找不到此題目的分組資料。")
+        st.warning("找不到此題目的年資資料。")
 
-
-
-        # ===================================================================
 # ===================================================================
 # 頁面四：質性回饋分析 (修正版，處理 int 錯誤)
 # ===================================================================
-elif page == "質性回饋分析 (Qualitative)":
+elif page == "質性回饋分析":
     
     st.header("質性回饋分析")
     
@@ -280,75 +343,52 @@ elif page == "質性回饋分析 (Qualitative)":
     qual_questions_map_inv = {v: k for k, v in qual_questions_map.items()}
 
     # --- (B) 建立子頁面 (Tabs) ---
-    tab1, tab2 = st.tabs(["方案一：互動式回饋瀏覽器 (推薦)", "方案二：詞雲 (Word Cloud)"])
+    tab1, tab2 = st.tabs(["回饋瀏覽", "詞雲"])
 
-    # --- Tab 1: 互動式回饋瀏覽器 ---
+# --- Tab 1: 互動式回饋瀏覽器 ---
     with tab1:
-        st.subheader("互動式回饋瀏覽器")
+        st.subheader("回饋瀏覽")
         
-        # (1) 篩選器
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            # 篩選質性問題
-            selected_q_text = st.selectbox(
-                "選擇要查看的質性問題：",
-                qual_questions_map.values()
-            )
-            selected_q_id = qual_questions_map_inv[selected_q_text]
-            
-        with col2:
-            # 篩選組別 (Q2)
-            group_list = ["(全部)"] + df_raw['Q2'].dropna().unique().tolist()
-            selected_group = st.selectbox("篩選組別 (Q2)：", group_list)
-        
-        with col3:
-            # 篩選年資 (Q4)
-            # 我們用 R 腳本 v5 的編碼來建立分組
-            df_raw['Q4_grouped'] = df_raw['Q4'].map({
-                0.5: "1 年以下", 1.5: "1-2 年", 2.5: "2-3 年", 3.0: "3 年以上"
-            })
-            seniority_list = ["(全部)"] + ["1 年以下", "1-2 年", "2-3 年", "3 年以上"]
-            selected_seniority = st.selectbox("篩選年資 (Q4)：", seniority_list)
+        # (1) 篩選器 [已移除組別與年資篩選]
+        # 篩選質性問題
+        selected_q_text = st.selectbox(
+            "選擇要查看的質性問題：",
+            qual_questions_map.values()
+        )
+        selected_q_id = qual_questions_map_inv[selected_q_text]
 
-        # (2) 篩選資料
-        df_filtered_raw = df_raw.copy()
-        if selected_group != "(全部)":
-            df_filtered_raw = df_filtered_raw[df_filtered_raw['Q2'] == selected_group]
-        if selected_seniority != "(全部)":
-            df_filtered_raw = df_filtered_raw[df_filtered_raw['Q4_grouped'] == selected_seniority]
+        # (2) 篩選資料 [已移除]
+        # (No filtering needed)
             
         # (3) 顯示結果
         st.divider()
         
-        # 取得該題目的所有非空回饋
-        feedbacks = df_filtered_raw[selected_q_id].dropna().tolist()
+        # 取得該題目的所有非空回饋 (直接從 df_raw 取得)
+        feedbacks = df_raw[selected_q_id].dropna().tolist()
         
         st.write(f"#### 顯示 {len(feedbacks)} 筆回饋 (來自 {selected_q_text})")
+        
+        # --- [BUG 修正] ---
+        # 補回顯示回饋的迴圈 (Loop)
         if not feedbacks:
-            st.info("在目前的篩選條件下，沒有找到任何回饋。")
+            st.info("此問題沒有任何回饋。")
         else:
             # 使用 expander 顯示每一筆回饋
             for i, feedback in enumerate(feedbacks):
                 with st.expander(f"回饋 #{i+1}"):
-                    # [修正] 同樣確保這裡也轉換為 str，以防萬一
                     st.write(str(feedback)) 
-
+        # --- [修正結束] ---
     # --- Tab 2: 詞雲 ---
     with tab2:
-        st.subheader("詞雲 (Word Cloud)")
+        st.subheader("詞雲")
         st.warning("""
-        **[重要] 執行詞雲的技術限制：**
-        1.  **中文字體：** 您必須在下方欄位提供一個您電腦中的「中文字體檔」路徑 (e.g., `.ttf` 或 `.ttc`)。
-        2.  **斷詞：** 使用 `jieba` 斷詞，可能不完美。
-        3.  **脈絡：** 詞雲會遺失「不滿意」的脈絡，請謹慎解讀。
+        **詞雲的限制：**
+        1.  **斷詞：** 使用 `jieba` 斷詞，可能不完美。
+        2.  **脈絡：** 詞雲會遺失「不滿意」的脈絡，請謹慎解讀。
         """)
         
         # (1) 讓使用者提供字體路徑
-        font_path = st.text_input(
-            "請輸入您電腦的中文字體路徑 (例如 /Library/Fonts/jf-openhuninn-2.1.ttf 或 /System/Library/Fonts/PingFang.ttc)",
-            # 預設一個 macOS 的常用路徑
-            "/System/Library/Fonts/PingFang.ttc" 
-        )
+        font_path = ("jf-openhuninn-2.1.ttf")
         
         # (2) 選擇要生成詞雲的問題
         selected_q_text_wc = st.selectbox(
