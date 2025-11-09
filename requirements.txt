@@ -4,3 +4,4 @@ plotly
 jieba
 wordcloud
 matplotlib
+statsmodels

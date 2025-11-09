@@ -11,6 +11,9 @@ import plotly.io as pio
 import jieba 
 import wordcloud
 import matplotlib.pyplot as plt
+import re # 用於質性頁面
+import statsmodels.api as sm # [新增] 迴歸分析套件
+from statsmodels.stats.proportion import proportion_confint
 
 # --- 0. 頁面設定 ---
 st.set_page_config(
@@ -34,11 +37,12 @@ def load_data():
         # 質性分析所需的「原始」資料
         df_codebook = pd.read_csv("codebook.csv")
         df_raw = pd.read_csv("2025 CZ Engagement survey (回覆) 的副本 - 表單回應 1.csv")
-
+        # [新增] 載入 R 腳本清理後的「全數值」原始資料 (N=18)
+        df_cleaned = pd.read_csv("cleaned_numeric_data.csv")
         # [重要] 幫原始資料套上 Q 編號
         df_raw.columns = df_codebook['New_Column'].values
 
-        return df_overall, df_group, df_seniority, df_raw, df_codebook
+        return df_overall, df_group, df_seniority, df_raw, df_codebook, df_cleaned
 
     except FileNotFoundError as e:
         st.error(f"錯誤：找不到必要的 CSV 檔案。請確保 {e.filename} 與 dashboard.py 在同一資料夾中。")
@@ -46,13 +50,15 @@ def load_data():
         return None, None, None, None, None
 
 # [重要] 修改這一行，接收新載入的資料
-df_overall, df_group, df_seniority, df_raw, df_codebook = load_data()
+df_overall, df_group, df_seniority, df_raw, df_codebook, df_cleaned = load_data()
 st.sidebar.title("分析維度")
 page = st.sidebar.radio(
     "選擇您要查看的頁面：",
     ("總體概況", 
+    "選項顯著性",
      "依「組別」分析", 
      "依「年資」分析", 
+     "關聯性分析",
      "質性回饋分析") # <-- 新增
 )
 
@@ -189,6 +195,91 @@ if page == "總體概況":
             
     except Exception as e:
         st.error(f"查詢單一題目統計時發生錯誤: {e}")
+
+# ===================================================================
+# 頁面二：選項顯著性 (CI Test)  <-- [*** 新增區塊 ***]
+# ===================================================================
+elif page == "選項顯著性":
+    st.header("選項顯著性分析 (95% 信賴區間)")
+    st.warning(f"""
+    **[分析說明]：**
+    由於總樣本數 N={len(df_cleaned)} 過小，不適合執行傳統的卡方檢定（違反期望次數 > 5 的假設）。
+    
+    此頁面採用在統計上更穩健的**「95% 信賴區間 (Confidence Intervals)」** 來比較選項之間的差異。
+    """)
+    st.markdown("---")
+    
+    try:
+        # 1. 取得所有「數值型」題目的列表 (用於下拉選單)
+        all_numeric_questions = df_overall.sort_values(
+            by='New_Column', 
+            key=lambda col: col.str.replace('Q', '').astype(int)
+        )['Original_Column'].tolist()
+        
+        # 2. 建立下拉選單
+        selected_question_ci = st.selectbox(
+            "請選擇您要分析顯著性的問題：",
+            all_numeric_questions,
+            key="ci_select"
+        )
+        
+        # 3. 取得 Q 編號
+        selected_q_id = df_overall[df_overall['Original_Column'] == selected_question_ci]['New_Column'].values[0]
+
+        # 4. 從 df_raw (原始資料) 中取得該欄位的次數分配
+        df_counts = df_raw[selected_q_id].dropna().value_counts().reset_index()
+        df_counts.columns = ['選項 (原始文字)', '次數 (N)']
+        
+        # 5. 計算總 N 數 (用於計算佔比)
+        N_total = df_counts['次數 (N)'].sum()
+        
+        # 6. 計算佔比與 95% 信賴區間
+        df_counts['佔比'] = df_counts['次數 (N)'] / N_total
+        
+        # 使用 statsmodels 計算信賴區間 (Wilson C.I. 較適合小樣本)
+        ci_low, ci_high = proportion_confint(df_counts['次數 (N)'], N_total, method='wilson')
+        
+        # 計算誤差線 (error bar) 需要的值
+        df_counts['CI (下限)'] = ci_low
+        df_counts['CI (上限)'] = ci_high
+        df_counts['誤差 (上)'] = df_counts['CI (上限)'] - df_counts['佔比']
+        df_counts['誤差 (下)'] = df_counts['佔比'] - df_counts['CI (下限)']
+
+        
+        # 7. 繪圖 (依選項文字排序)
+        fig_ci = px.bar(
+            df_counts.sort_values(by='選項 (原始文字)'), 
+            x='選項 (原始文字)', 
+            y='佔比', 
+            text=df_counts.apply(lambda row: f"{row['佔比']:.1%} (N={row['次數 (N)']})", axis=1), # 顯示百分比和 N 數
+            title=f"「{selected_question_ci}」的選項分佈 (含 95% 信賴區間)",
+            error_y='誤差 (上)', # 加入誤差線 (上)
+            error_y_minus='誤差 (下)' # 加入誤差線 (下)
+        )
+        fig_ci.update_traces(textposition='outside')
+        
+        # 8. 調整 Y 軸緩衝，並設定 Y 軸為百分比格式
+        max_y_val = df_counts['CI (上限)'].max() # 以信賴區間的上限為基準
+        fig_ci.update_layout(
+            xaxis_title="填答選項", 
+            yaxis_title="佔比 (Percentage)",
+            yaxis_range=[0, max_y_val * 1.15], # 增加 15% 緩衝
+            yaxis_tickformat='.0%' # Y 軸改為百分比
+        )
+        
+        st.plotly_chart(fig_ci, use_container_width=True)
+        
+        st.info(
+            "**如何解讀上圖：**\n"
+            f"此圖表顯示了 N={N_total} 筆有效回覆中，各選項的佔比及其 95% 信賴區間 (黑色的T字誤差線)。\n\n"
+            "**如果兩個選項的 95% 信賴區間（黑色誤差線）沒有互相重疊，代表它們的佔比差異達到了統計上的顯著水準 (p < .05)。**\n\n"
+            f"（*例如：若『4-非常同意』的區間 [33%, 77%] 與『1-非常不同意』的區間 [0%, 18%] 沒有重疊，則代表選擇 4 的人顯著多於選擇 1 的人。*）"
+        )
+
+    except Exception as e_ci:
+        st.error(f"繪製選項顯著性圖表時發生錯誤: {e_ci}")
+        st.error(f"請確認 `statsmodels` 套件已加入 `requirements.txt` 並安裝成功。")
+
 # ===================================================================
 # 頁面二：依「組別」分析
 # ===================================================================
@@ -339,6 +430,208 @@ elif page == "依「年資」分析":
     else:
         st.warning("找不到此題目的年資資料。")
 
+# ===================================================================
+# 頁面四：關聯性分析 (Correlation)  <-- [*** 修改後的區塊 ***]
+# ===================================================================
+elif page == "關聯性分析":
+    
+    st.header("關聯性分析")
+    st.warning(f"""
+    **[重要] 統計限制提醒：**
+    由於總樣本數 N={len(df_cleaned)}，以下的相關係數與迴歸分析僅供**描述性觀察**。
+    此樣本數 (N=18) 太小，無法進行有意義的統計推論。
+    """)
+    st.markdown("---")
+
+    # --- 1. 準備題目列表 ---
+    
+    # 依變項 (Y) 的 Q 編號 (固定)
+    Y_OPTIONS = {
+        "Q104: 整體而言，我對於在 誠致 工作的滿意度是：": "Q104",
+        "Q100: 我預計會在 誠致 持續任職": "Q100"
+    }
+    
+    # 自變項 (X) 的選項 (排除 Q100, Q104, 和其他非評分題)
+    # 我們從 df_overall 抓取所有題目，再排除 Y 軸的
+    x_options_df = df_overall[
+        ~df_overall['New_Column'].isin(['Q100', 'Q104', 'Q4', 'Q5']) & (df_overall['N'] > 0)
+    ].sort_values(by='New_Column', key=lambda col: col.str.replace('Q', '').astype(int))
+    
+    # 建立 {題目文字: Q編號} 的 X 軸字典
+    X_OPTIONS = x_options_df.set_index('Original_Column')['New_Column'].to_dict()
+    
+    # 建立 {Q編號: 題目文字} 的反向字典，供迴歸表使用
+    X_MAP_INV = x_options_df.set_index('New_Column')['Original_Column'].to_dict()
+
+    # --- 2. 建立子分頁 (Tabs) ---
+    tab1, tab2, tab3 = st.tabs([
+        "1. 動態散佈圖 (Scatter Plot)", 
+        "2. 相關係數總表 (Correlation Rank)", 
+        "3. 最佳預測變項 (Regression)"
+    ])
+
+    # ==================== TAB 1: 動態散佈圖 ====================
+    with tab1:
+        st.subheader("動態散佈圖 (X vs. Y)")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            selected_y_text = st.selectbox(
+                "選擇 依變項 (Y 軸)：",
+                Y_OPTIONS.keys(),
+                key="scatter_y"
+            )
+        with col2:
+            selected_x_text = st.selectbox(
+                "選擇 自變項 (X 軸)：",
+                X_OPTIONS.keys(),
+                key="scatter_x"
+            )
+
+        # 取得 Q 編號
+        y_q_id = Y_OPTIONS[selected_y_text]
+        x_q_id = X_OPTIONS[selected_x_text]
+        
+        st.markdown("---")
+
+        # 準備分析資料
+        df_corr_data = df_cleaned[[y_q_id, x_q_id]].dropna()
+        df_corr_data.columns = ['Y_Value', 'X_Value']
+        
+        st.subheader(f"分析結果 (有效 N = {len(df_corr_data)})")
+
+        # 計算相關係數
+        correlation_r = df_corr_data['X_Value'].corr(df_corr_data['Y_Value'])
+        st.metric(f"Pearson 相關係數 (r)", f"{correlation_r:.4f}")
+        
+        # 繪製散佈圖
+        fig_corr = px.scatter(
+            df_corr_data,
+            x="X_Value",
+            y="Y_Value",
+            labels={"X_Value": f"X: {selected_x_text}", "Y_Value": f"Y: {selected_y_text}"},
+            title=f"關聯性散佈圖",
+            trendline="ols",
+        )
+        
+        if y_q_id == 'Q100':
+             fig_corr.update_layout(
+                yaxis=dict(
+                    tickmode='array',
+                    tickvals=[0, 0.5, 1.5, 2.0],
+                    ticktext=["不考慮", "考慮 1 年內", "考慮 1-2 年", "考慮 2 年以上"]
+                )
+            )
+        st.plotly_chart(fig_corr, use_container_width=True)
+
+    # ==================== TAB 2: 相關係數總表 ====================
+    with tab2:
+        st.subheader("相關係數總表 (依 r 排序)")
+        
+        selected_y_corr_text = st.selectbox(
+            "選擇要排序的 依變項 (Y 軸)：",
+            Y_OPTIONS.keys(),
+            key="corr_y"
+        )
+        y_q_id_corr = Y_OPTIONS[selected_y_corr_text]
+
+        all_correlations = []
+        y_series = df_cleaned[y_q_id_corr].dropna()
+        
+        for x_text, x_id in X_OPTIONS.items():
+            x_series = df_cleaned[x_id]
+            combined_series = pd.DataFrame({'Y': y_series, 'X': x_series}).dropna()
+            
+            if len(combined_series) > 1:
+                corr = combined_series['Y'].corr(combined_series['X'])
+                all_correlations.append({
+                    "題目 (自變項)": x_text,
+                    "相關係數 (r)": corr,
+                    "N": len(combined_series)
+                })
+        
+        df_all_corr_sorted = pd.DataFrame(all_correlations).sort_values(
+            by="相關係數 (r)", 
+            ascending=False
+        )
+        
+        st.dataframe(
+            df_all_corr_sorted.style.format({'相關係數 (r)': '{:.4f}'}),
+            height=600,
+            use_container_width=True
+        )
+
+    # ==================== TAB 3: 最佳預測變項 (迴歸) ====================
+    with tab3:
+        st.subheader("最佳預測變項 (依 R-Squared 排序)")
+        st.error(f"**[!] 統計警告**：N=18，此表**不具推論意義**，僅供描述性參考。")
+
+        selected_y_reg_text = st.selectbox(
+            "選擇要預測的 依變項 (Y 軸)：",
+            Y_OPTIONS.keys(),
+            key="reg_y"
+        )
+        y_q_id_reg = Y_OPTIONS[selected_y_reg_text]
+
+        all_regressions = []
+        
+        # 取得 Y 軸的數值 (N=18)
+        Y_series_reg = df_cleaned[y_q_id_reg].dropna()
+
+        # 遍歷所有 X 變項
+        for x_text, x_id in X_OPTIONS.items():
+            
+            X_series_reg = df_cleaned[x_id]
+            
+            # 準備 X, Y 資料 (移除 NA)
+            df_reg_data = pd.DataFrame({'Y': Y_series_reg, 'X': X_series_reg}).dropna()
+            
+            N_effective = len(df_reg_data)
+            
+            # 必須至少有 N > 2 才能進行簡單迴歸
+            if N_effective > 2:
+                Y_reg = df_reg_data['Y']
+                X_reg = df_reg_data['X']
+                
+                # [重要] statsmodels 預設沒有截距項 (intercept)，我們必須手動加入
+                X_reg_with_const = sm.add_constant(X_reg) 
+                
+                try:
+                    model = sm.OLS(Y_reg, X_reg_with_const).fit()
+                    
+                    all_regressions.append({
+                        "題目 (自變項)": x_text,
+                        "R-Squared (解釋力)": model.rsquared,
+                        "Coef (係數)": model.params.iloc[1], # [1] 是 X 的係數, [0] 是 const
+                        "P>|t| (p-value)": model.pvalues.iloc[1],
+                        "N (有效樣本)": N_effective
+                    })
+                except Exception as e:
+                    # 處理計算錯誤 (例如 X 也是常數)
+                    all_regressions.append({
+                        "題目 (自變項)": x_text,
+                        "R-Squared (解釋力)": 0.0,
+                        "Coef (係數)": None,
+                        "P>|t| (p-value)": None,
+                        "N (有效樣本)": N_effective
+                    })
+
+        # 轉換為 DataFrame 並排序
+        df_all_reg_sorted = pd.DataFrame(all_regressions).sort_values(
+            by="R-Squared (解釋力)", 
+            ascending=False
+        )
+
+        # 顯示表格
+        st.dataframe(
+            df_all_reg_sorted.style.format({
+                'R-Squared (解釋力)': '{:.4f}',
+                'Coef (係數)': '{:.3f}',
+                'P>|t| (p-value)': '{:.3f}'
+            }),
+            height=600,
+            use_container_width=True
+        )
 # ===================================================================
 # 頁面四：質性回饋分析 (修正版，處理 int 錯誤)
 # ===================================================================
