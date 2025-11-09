@@ -29,8 +29,6 @@ pio.templates.default = "plotly_white"
 @st.cache_data
 def load_data():
     try:
-        # --- 修正：移除所有 "2025ES/" 路徑前綴 ---
-        
         # 彙總好的數值資料 (用於 Dashboard 主體)
         df_overall = pd.read_csv("numeric_descriptive_stats.csv")
         df_group = pd.read_csv("grouped_numeric_stats_by_Q2.csv")
@@ -38,25 +36,17 @@ def load_data():
 
         # 質性分析所需的「原始」資料
         df_codebook = pd.read_csv("codebook.csv")
-        df_raw = pd.read_csv("2025 CZ Engagement survey (回覆) の副本 - 表單回應 1.csv")
-
-        # 載入 R 腳本清理後的「全數值」原始資料 (N=18)
-        df_cleaned = pd.read_csv("cleaned_numeric_data.csv") 
-
-        # [重要] 幫原始資料 (df_raw) 套上 Q 編號
+        df_raw = pd.read_csv("2025 CZ Engagement survey (回覆) 的副本 - 表單回應 1.csv")
+        # [新增] 載入 R 腳本清理後的「全數值」原始資料 (N=18)
+        df_cleaned = pd.read_csv("cleaned_numeric_data.csv")
+        # [重要] 幫原始資料套上 Q 編號
         df_raw.columns = df_codebook['New_Column'].values
 
         return df_overall, df_group, df_seniority, df_raw, df_codebook, df_cleaned
 
     except FileNotFoundError as e:
-        st.error(f"錯誤：在 GitHub 根目錄中找不到必要的 CSV 檔案 '{e.filename}'。")
-        st.error("請確認您已將『所有』6 個 CSV 檔案 (包含 'cleaned_numeric_data.csv') 上傳到 GitHub 儲存庫的「根目錄」下，與 dashboard.py 放在一起。")
-        
-        # --- 修正 2：確保 'except' 區塊返回 6 個值 ---
-        return None, None, None, None, None, None
-        
-    except Exception as e:
-        st.error(f"載入資料時發生預期外的錯誤: {e}")
+        st.error(f"錯誤：找不到必要的 CSV 檔案。請確保 {e.filename} 與 dashboard.py 在同一資料夾中。")
+        st.error("請確認您已執行 R 腳本，並產出 'codebook.csv', 'numeric_descriptive_stats.csv' 等檔案。")
         return None, None, None, None, None, None
 
 # [重要] 修改這一行，接收新載入的資料
