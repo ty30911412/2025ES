@@ -1,9 +1,10 @@
 ```{r}
 # ---------------------------------------------------------------
-# 描述性統計分析腳本 (R) - [2025-10-28 v3 更新版]
+# 描述性統計分析腳本 (R) - [2025-10-28 v4 更新版]
 # - 更新 1: 數值型統計(numeric_stats) 將按 Q 編號排序
 # - 更新 2: 修正類別型統計(categorical_stats)的 Value 欄位錯誤
-# - 更新 3 (本次): 新增 Q31, Q32, Q33 的特殊編碼規則 (我不理解=0)
+# - 更新 3: 新增 Q31, Q32, Q33 的特殊編碼規則 (我不理解=0)
+# - 更新 4 (本次): 新增 Q4 (年資) 的特殊數值編碼 (0.5, 1.5, 2.5, 3)
 # ---------------------------------------------------------------
 
 # --- 0. 安裝與載入套件 ---
@@ -39,66 +40,56 @@ df_renamed <- df_raw
 colnames(df_renamed) <- new_names
 
 print("已建立欄位對照表 (Codebook)，變數 'codebook' 可供查閱。")
-# write_csv(codebook, "codebook.csv")
+write_csv(codebook, "codebook.csv")
 
 
 # --- 3. 自動分類與清理欄位 ---
+LIKERT_PATTERN <- "^\\s*\\d+\\s*-.+" 
+MIN_AVG_LEN_FOR_QUALITATIVE <- 50  
+MAX_UNIQUE_FOR_CATEGORICAL <- 15 
 
-# 定義自動分類的規則 (Heuristics)
-LIKERT_PATTERN <- "^\\s*\\d+\\s*-.+" # 偵測 "數字 - 文字" 格式
-MIN_AVG_LEN_FOR_QUALITATIVE <- 50  # 質性欄位的最小平均字串長度
-MAX_UNIQUE_FOR_CATEGORICAL <- 15 # 類別欄位允許的最大唯一值數量
-
-# --- [更新 3] ---
-# 建立一個清單，存放需要特殊編碼 (含 "我不理解") 的欄位
-special_recode_cols <- c("Q31", "Q32", "Q33")
+# --- [更新 5] ---
+special_likert_cols <- c("Q31", "Q32", "Q33")
+# 將 Q4 和 Q100 都加入特殊數值編碼清單
+special_numeric_cols <- c("Q4", "Q100")
 
 # 準備用來存放分類結果的向量
-likert_text_cols <- c()       # 標準 Likert 欄位 ("4 - 同意")
-custom_likert_cols <- c()     # [新] 自訂 Likert 欄位 (Q31-Q33)
-qualitative_cols <- c()       # 質性欄位 (長文字，將被忽略)
-numeric_cols_pre <- c()       # 原始就是數值的欄位
-categorical_cols_pre <- c()   # 原始就是文字的類別欄位
+likert_text_cols <- c()       
+custom_likert_cols <- c()     
+custom_numeric_cols <- c()    # [更新] Q4 和 Q100 會進入這裡
+qualitative_cols <- c()       
+numeric_cols_pre <- c()       
+categorical_cols_pre <- c()   
 
 # 遍歷所有欄位進行分類
 for (col in new_names) {
   if (all(is.na(df_renamed[[col]]))) next
-  
   col_type <- class(df_renamed[[col]])
   
   if (col_type %in% c("numeric", "integer", "double")) {
-    # 類型 1: 原始就是數值
     numeric_cols_pre <- c(numeric_cols_pre, col)
-    
   } else if (col_type == "character") {
-    # 類型 2: 原始是文字
     first_val <- first(na.omit(df_renamed[[col]]))
     
-    # --- [更新 3] 優先檢查是否為特殊編碼欄位 ---
-    if (col %in% special_recode_cols) {
+    if (col %in% special_likert_cols) {
       custom_likert_cols <- c(custom_likert_cols, col)
-      
+    } else if (col %in% special_numeric_cols) {
+      # Q4 和 Q100 會進入這裡
+      custom_numeric_cols <- c(custom_numeric_cols, col)
     } else if (!is.na(first_val) && str_detect(first_val, LIKERT_PATTERN)) {
-      # 類型 2a: 是標準 Likert 量表 ("4 - 同意")
       likert_text_cols <- c(likert_text_cols, col)
-      
     } else {
-      # 類型 2b/2c: 檢查是類別型還是質性
       avg_len <- mean(nchar(df_renamed[[col]]), na.rm = TRUE)
       n_unique <- n_distinct(df_renamed[[col]], na.rm = TRUE)
-      
       if (avg_len > MIN_AVG_LEN_FOR_QUALITATIVE || n_unique > MAX_UNIQUE_FOR_CATEGORICAL) {
-        # 類型 2b: 質性欄位
         qualitative_cols <- c(qualitative_cols, col)
       } else {
-        # 類型 2c: 類別型欄位 (例如 "我的組別")
         categorical_cols_pre <- c(categorical_cols_pre, col)
       }
     }
   }
 }
-
-print("欄位分類完成 (已加入 Q31-Q33 特殊規則)。")
+print("欄位分類完成 (已加入 Q4, Q31-Q33, Q100 特殊規則)。")
 
 # --- 4. 執行資料清理 (轉換 Likert 欄位) ---
 
@@ -107,23 +98,42 @@ df_cleaned <- df_renamed %>%
   mutate(across(all_of(likert_text_cols), 
                 ~as.numeric(str_extract(.x, "^\\s*\\d+")))) %>%
   
-  # --- [更新 3] (B) 處理 Q31-Q33 特殊編碼欄位 ---
+  # (B) 處理 Q31-Q33 特殊編碼欄位
   mutate(across(all_of(custom_likert_cols),
                 ~case_when(
-                  str_detect(.x, "^4") ~ 4, # 4 - 非常同意
-                  str_detect(.x, "^3") ~ 3, # 3 - 同意
-                  str_detect(.x, "^2") ~ 2, # 2 - 不同意
-                  str_detect(.x, "^1") ~ 1, # 1 - 非常不同意
-                  str_detect(.x, "我不理解") ~ 0, # [新規則]
-                  TRUE ~ NA_real_ # 其他 (例如 NA)
-                )))
+                  str_detect(.x, "^4") ~ 4,
+                  str_detect(.x, "^3") ~ 3,
+                  str_detect(.x, "^2") ~ 2,
+                  str_detect(.x, "^1") ~ 1,
+                  str_detect(.x, "我不理解") ~ 0,
+                  TRUE ~ NA_real_ 
+                ))) %>%
 
-print("Likert 量表欄位已轉換為數值 (含 Q31-Q33)。")
+  # (C) 處理 Q4 (年資) 特殊編碼
+  # [優化] 直接針對欄位名稱 mutate，更清晰
+  mutate(Q4 = case_when(
+          Q4 == "1 年以下" ~ 0.5,
+          Q4 == "1-2 年" ~ 1.5,
+          Q4 == "2-3 年" ~ 2.5,
+          Q4 == "3 年以上" ~ 3.0,
+          TRUE ~ NA_real_ 
+        )) %>%
+
+  # --- [更新 5] (D) 處理 Q100 (留任) 特殊編碼 ---
+  mutate(Q100 = case_when(
+          Q100 == "不考慮持續任職" ~ 0,
+          Q100 == "考慮 1 年內持續任職" ~ 0.5,
+          Q100 == "考慮 1 - 2 年內持續任職" ~ 1.5,
+          Q100 == "考慮任職 2 年以上" ~ 2.0,
+          TRUE ~ NA_real_
+        ))
+
+print("Likert, Q4, Q100 欄位已轉換為數值。")
 
 # --- 5. 執行描述性統計 (數值型/評分型欄位) ---
 
-# --- [更新 3] 最終的數值欄位 = 原始數值 + 標準 Likert + 自訂 Likert ---
-numeric_analysis_cols <- c(numeric_cols_pre, likert_text_cols, custom_likert_cols)
+# --- [更新 4] 最終的數值欄位 = 原始數值 + 標準 Likert + 自訂 Likert + Q4 ---
+numeric_analysis_cols <- c(numeric_cols_pre, likert_text_cols, custom_likert_cols, custom_numeric_cols)
 numeric_analysis_cols <- setdiff(numeric_analysis_cols, "Q1") # 排除 Q1 (時間戳記)
 
 # 計算描述性統計
@@ -140,7 +150,7 @@ numeric_stats <- df_cleaned %>%
         Min = ~min(.x, na.rm = TRUE),
         Max = ~max(.x, na.rm = TRUE)
       ),
-      .names = "{.col}___{.fn}" # 使用 ___ 作為分隔符
+      .names = "{.col}___{.fn}" 
     )
   ) %>%
   pivot_longer(
@@ -164,7 +174,7 @@ numeric_stats <- df_cleaned %>%
   arrange(sort_key) %>%
   select(-sort_key)
 
-print("--- NTumeric/Likert Stats) [已按 Q 編號排序, 含 Q31-Q33] ---")
+print("--- 數值型欄位描述性統計 (Numeric/Likert Stats) [已按 Q 編號排序, 含 Q4, Q31-Q33] ---")
 print(numeric_stats, n = Inf) 
 
 print("數值型統計已儲存至變數 'numeric_stats'")
@@ -173,7 +183,7 @@ write_csv(numeric_stats, "numeric_descriptive_stats.csv")
 
 # --- 6. 執行描述性統計 (類別型欄位) ---
 
-# [更新 3] Q31-Q33 已被移除，這裡不需更動
+# [更新 4] Q4 已被移除，這裡不需更動
 categorical_analysis_cols <- categorical_cols_pre
 
 categorical_stats <- map_dfr(categorical_analysis_cols, ~{
@@ -202,7 +212,7 @@ print("--- 分析完成 ---")
 # --- 5. 執行「分群」描述性統計 ---
 
 # (A) 定義要分析的數值欄位
-numeric_analysis_cols <- c(numeric_cols_pre, likert_text_cols, custom_likert_cols)
+numeric_analysis_cols <- c(numeric_cols_pre, likert_text_cols, custom_likert_cols, custom_numeric_cols)
 numeric_analysis_cols <- setdiff(numeric_analysis_cols, "Q1") # 排除 Q1 (時間戳記)
 
 # (B) 定義您要納入分析的組別
@@ -272,14 +282,12 @@ write_csv(grouped_numeric_stats, "grouped_numeric_stats.csv")
 print("--- 分群分析完成 ---")
 ```
 ```{r}
-# --- 5. 執行「分群」描述性統計 (依 Q4 年資) ---
+
+```
+```{r}
 # ---------------------------------------------------------------
-# 分群描述性統計 (R) - 依「總工作年資」(Q4)
-#
-# 目的: 
-# 1. 執行完整的資料清理 (同主腳本)
-# 2. 篩選出特定的四個年資組別
-# 3. 依年資計算所有數值型/評分型題目的描述性統計
+# 分群描述性統計 (R) - 依「總工作年資」(Q4) [v6 更新版]
+# - 更新 (本次): 納入 Q100 (留任) 的特殊數值編碼
 # ---------------------------------------------------------------
 
 # --- 0. 載入套件 ---
@@ -305,14 +313,15 @@ codebook <- tibble(
 df_renamed <- df_raw
 colnames(df_renamed) <- new_names
 
-# --- 3. 欄位分類 (與主腳本相同) ---
-LIKERT_PATTERN <- "^\\s*\\d+\\s*-.+"
-special_recode_cols <- c("Q31", "Q32", "Q33") # Q31-Q33 特殊編碼
+# --- 3. 欄位分類 (與主腳本 v5 相同) ---
+LIKERT_PATTERN <- "^\\s*\\d+\\s*-.+" 
+special_likert_cols <- c("Q31", "Q32", "Q33")
+special_numeric_cols <- c("Q4", "Q100") # [更新] 納入 Q100
 
 likert_text_cols <- c()
 custom_likert_cols <- c()
+custom_numeric_cols <- c() # [更新] 納入 Q100
 numeric_cols_pre <- c()
-# (此腳本暫不處理類別型或質性)
 
 for (col in new_names) {
   if (all(is.na(df_renamed[[col]]))) next
@@ -323,21 +332,21 @@ for (col in new_names) {
   } else if (col_type == "character") {
     first_val <- first(na.omit(df_renamed[[col]]))
     
-    if (col %in% special_recode_cols) {
+    if (col %in% special_likert_cols) {
       custom_likert_cols <- c(custom_likert_cols, col)
+    } else if (col %in% special_numeric_cols) {
+      custom_numeric_cols <- c(custom_numeric_cols, col) # [更新] 納入 Q100
     } else if (!is.na(first_val) && str_detect(first_val, LIKERT_PATTERN)) {
       likert_text_cols <- c(likert_text_cols, col)
     }
   }
 }
-print("欄位分類完成。")
+print("欄位分類完成 (已納入 Q100)。")
 
-# --- 4. 執行資料清理 (與主腳本相同) ---
+# --- 4. 執行資料清理 (與主腳本 v5 相同) ---
 df_cleaned <- df_renamed %>%
-  # (A) 處理標準 Likert
   mutate(across(all_of(likert_text_cols), 
                 ~as.numeric(str_extract(.x, "^\\s*\\d+")))) %>%
-  # (B) 處理 Q31-Q33 特殊編碼
   mutate(across(all_of(custom_likert_cols),
                 ~case_when(
                   str_detect(.x, "^4") ~ 4,
@@ -346,31 +355,59 @@ df_cleaned <- df_renamed %>%
                   str_detect(.x, "^1") ~ 1,
                   str_detect(.x, "我不理解") ~ 0,
                   TRUE ~ NA_real_
-                )))
-print("資料清理完成。")
+                ))) %>%
+  # (C) 處理 Q4 (年資)
+  mutate(Q4 = case_when(
+          Q4 == "1 年以下" ~ 0.5,
+          Q4 == "1-2 年" ~ 1.5,
+          Q4 == "2-3 年" ~ 2.5,
+          Q4 == "3 年以上" ~ 3.0,
+          TRUE ~ NA_real_ 
+        )) %>%
+  # (D) [更新] 處理 Q100 (留任)
+  mutate(Q100 = case_when(
+          Q100 == "不考慮持續任職" ~ 0,
+          Q100 == "考慮 1 年內持續任職" ~ 0.5,
+          Q100 == "考慮 1 - 2 年內持續任職" ~ 1.5,
+          Q100 == "考慮任職 2 年以上" ~ 2.0,
+          TRUE ~ NA_real_
+        ))
+print("資料清理完成 (已納入 Q100)。")
+
 
 # --- 5. 執行「分群」描述性統計 (依 Q4 年資) ---
 
 # (A) 定義要分析的數值欄位
-numeric_analysis_cols <- c(numeric_cols_pre, likert_text_cols, custom_likert_cols)
-numeric_analysis_cols <- setdiff(numeric_analysis_cols, "Q1") # 排除 Q1 (時間戳記)
+# [更新] 納入 custom_numeric_cols
+numeric_analysis_cols <- c(numeric_cols_pre, likert_text_cols, custom_likert_cols, custom_numeric_cols)
+numeric_analysis_cols <- setdiff(numeric_analysis_cols, "Q1") 
 
-# (B) 定義您要納入分析的年資組別
-# Q4 = 我在 誠致 的總工作年資
+# (B) 定義您要的年資「文字」組別
 target_seniority_groups <- c("1 年以下", "1-2 年", "2-3 年", "3 年以上")
 
 # (C) 執行分群計算
 grouped_numeric_stats_by_seniority <- df_cleaned %>%
-  # (C.1) 篩選出您指定的組別
-  filter(Q4 %in% target_seniority_groups) %>%
   
-  # (C.2) 依據 Q4 (年資) 進行分組
-  group_by(Q4) %>%
+  # (C.1) 建立新的「文字」分組欄位 Q4_grouped
+  mutate(Q4_grouped = case_when(
+    Q4 == 0.5 ~ "1 年以下",
+    Q4 == 1.5 ~ "1-2 年",
+    Q4 == 2.5 ~ "2-3 年",
+    Q4 == 3.0 ~ "3 年以上",
+    TRUE ~ NA_character_ 
+  )) %>%
   
-  # (C.3) 對所有數值欄位進行彙總
+  # (C.2) 篩選出您指定的組別
+  filter(Q4_grouped %in% target_seniority_groups) %>%
+  
+  # (C.3) 依據 *新的* Q4_grouped (年資) 進行分組
+  group_by(Q4_grouped) %>%
+  
+  # (C.4) 執行 across() 時，排除 Q4 
+  # Q100 會被自動計算
   summarise(
     across(
-      all_of(numeric_analysis_cols),
+      all_of(setdiff(numeric_analysis_cols, "Q4")), # 排除 Q4
       list(
         N = ~sum(!is.na(.)),
         Mean = ~mean(.x, na.rm = TRUE),
@@ -381,40 +418,39 @@ grouped_numeric_stats_by_seniority <- df_cleaned %>%
       ),
       .names = "{.col}___{.fn}"
     ),
-    .groups = "drop" # 計算完畢後解除分組
+    .groups = "drop" 
   ) %>%
   
-  # (C.4) 轉換為長表格 (方便閱讀與後續處理)
+  # (C.5) 轉換為長表格
   pivot_longer(
-    cols = -Q4, # 排除 Q4 (年資) 欄
+    cols = -Q4_grouped, 
     names_to = "Metric",
     values_to = "Value"
   ) %>%
   separate(Metric, into = c("New_Column", "Statistic"), sep = "___") %>%
   
-  # (C.5) 轉回寬表格 (N, Mean, SD... 變回欄位)
+  # (C.6) 轉回寬表格
   pivot_wider(
     names_from = Statistic,
     values_from = Value
   ) %>%
   
-  # (C.6) 整理結果
+  # (C.7) 整理結果
   left_join(codebook, by = "New_Column") %>%
   mutate(
     Mean = ifelse(is.nan(Mean), NA, Mean),
     SD = ifelse(is.nan(SD), NA, SD)
   ) %>%
   
-  # (C.7) 排序：先按年資，再按 Q 編號
-  # (可選) 讓年資有固定順序
-  mutate(Q4 = factor(Q4, levels = target_seniority_groups)) %>% 
+  # (C.8) 排序：先按年資，再按 Q 編號
+  mutate(Q4_grouped = factor(Q4_grouped, levels = target_seniority_groups)) %>% 
   mutate(sort_key = as.numeric(str_replace(New_Column, "Q", ""))) %>%
-  arrange(Q4, sort_key) %>%
+  arrange(Q4_grouped, sort_key) %>%
   
-  # (C.8) 最終欄位排序
-  select(Q4, New_Column, Original_Column, N, Mean, SD, Median, Min, Max, -sort_key)
+  # (C.9) 最終欄位排序
+  select(Q4_grouped, New_Column, Original_Column, N, Mean, SD, Median, Min, Max, -sort_key)
 
-print("--- 依總工作年資 (Q4) 分群之描述性統計 ---")
+print("--- 依總工作年資 (Q4_grouped) 分群之描述性統計 ---")
 print(grouped_numeric_stats_by_seniority, n = Inf)
 
 # 提示：儲存這個分群結果
@@ -422,4 +458,5 @@ print("分群統計已儲存至變數 'grouped_numeric_stats_by_seniority'")
 write_csv(grouped_numeric_stats_by_seniority, "grouped_numeric_stats_by_Q4.csv")
 
 print("--- 分群分析完成 ---")
+```
 
